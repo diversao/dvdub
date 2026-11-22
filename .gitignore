@@ -1,0 +1,21 @@
+# ambientes e caches
+.venv/
+__pycache__/
+*.pyc
+
+# referências de voz, gravações do jogo e testes (pessoais / direitos de terceiros)
+vozes/
+teste/
+video/
+
+# registros e binários
+*.log
+captura/captura.exe
+*.raw
+*.wav
+*.mp3
+*.mp4
+
+# demo do README (exceção às regras acima)
+!docs/demo.mp4
+!docs/demo.gif
