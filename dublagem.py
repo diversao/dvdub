@@ -487,8 +487,42 @@ class Voz:
         return (len(self.buf) - self.pos) / Mixer.SR
 
 
+POLIR_VOZ = True         # tratamento da voz na saída: graves cortados, presença, compressão leve, ambiente curto
+
+
+def polir(a, sr, ambiente=True):
+    """Deixa a voz sintética 'entrar' na cena: corta sujeira grave, realça presença (2–6 kHz),
+    comprime de leve (2:1) e põe um ambiente curto (120 ms). Custa < 5 ms por frase."""
+    import math
+    from scipy import signal
+    a = np.asarray(a, np.float32)
+    if len(a) < 512:
+        return a
+    b, c = signal.butter(2, 90 / (sr / 2), "highpass")
+    a = signal.filtfilt(b, c, a).astype(np.float32)
+    # realce de presença: biquad "peaking" (RBJ) em 3,5 kHz, Q 0,8, +2,5 dB
+    w = math.pi * 3500 / (sr / 2); alpha = math.sin(w) / (2 * 0.8); cw = math.cos(w); A = 10 ** (2.5 / 40)
+    b0, b1, b2 = 1 + alpha * A, -2 * cw, 1 - alpha * A
+    a0, a1, a2 = 1 + alpha / A, -2 * cw, 1 - alpha / A
+    a = signal.lfilter([b0 / a0, b1 / a0, b2 / a0], [1, a1 / a0, a2 / a0], a).astype(np.float32)
+    # compressão leve 2:1 acima de -18 dBFS (envelope RMS de 20 ms) + ganho de compensação
+    jan = max(1, int(0.02 * sr))
+    env = np.sqrt(signal.fftconvolve(a ** 2, np.ones(jan) / jan, "same") + 1e-9)
+    thr = 10 ** (-18 / 20)
+    ganho = np.where(env > thr, np.sqrt(thr / np.maximum(env, 1e-9)), 1.0)
+    a = a * ganho * 1.25
+    if ambiente:
+        n = int(0.12 * sr)
+        ir = (np.random.default_rng(1).standard_normal(n) * np.exp(-np.arange(n) / (0.03 * sr))).astype(np.float32)
+        ir[: int(0.004 * sr)] = 0  # pré-atraso de 4 ms
+        ir /= np.abs(ir).sum() / 4
+        a = a + 0.10 * signal.fftconvolve(a, ir)[: len(a)]
+    return np.clip(a, -0.98, 0.98).astype(np.float32)
+
+
 ATRASO_MAX_CLONE = 2.0   # s: com a fila mais atrasada que isso, a fala vai pelo Kokoro
-RATE_MAX_CLONE = 1.5     # aceleração máxima da voz com emoção
+CLONE_MIN_LETRAS = 28    # falas mais curtas que isso vão pela voz fixa do personagem (o clone deriva com pouco texto)
+RATE_MAX_CLONE = 1.15    # acima disso o phase vocoder dá som de robô
 
 
 def esticar(a, rate):
@@ -529,11 +563,11 @@ class Mixer:
         out[:, 0] = np.clip(mix, -1.0, 1.0)
 
     @classmethod
-    def ajustar(cls, audio, sr):
+    def ajustar(cls, audio, sr, ambiente=True):
         a = np.asarray(audio, np.float32).reshape(-1)
         if sr != cls.SR:
             a = np.interp(np.arange(0, len(a), sr / cls.SR), np.arange(len(a)), a).astype(np.float32)
-        return a
+        return polir(a, cls.SR, ambiente) if POLIR_VOZ else a
 
     def tocar(self, audio, sr):
         a = self.ajustar(audio, sr)
@@ -596,7 +630,7 @@ def tocar_mixer(entrada, vol):
         if isinstance(audio, FluxoClone):  # voz clonada chegando em pedaços: toca enquanto gera
             v, guardado, t_som = None, [], 0.0
             for pedaco in audio:
-                p = Mixer.ajustar(esticar(pedaco, audio.rate) * VOLUME_VOZ, audio.sr)
+                p = Mixer.ajustar(esticar(pedaco, audio.rate) * VOLUME_VOZ, audio.sr, ambiente=False)  # pedaços: sem cauda
                 if v is None:
                     # folga: com o jogo puxando a placa o clone gera ~no ritmo da fala; guardar um pouco
                     # antes de começar evita buracos no meio da frase
@@ -670,7 +704,7 @@ _H, _M = VOZ_HOMEM, VOZ_MULHER
 VOZ_POR_NOME = {
     "lucia": _M, "jason": _H, "mia": _M, "boobie": _H, "dre'quan": _H, "drequan": _H, "quan": _H, "dre": _H,
     "levi": _H, "roxy": _M, "luxe": _M, "bae-luxe": _M, "ambas": _M, "cal": _H, "raul": _H, "brian": _H,
-    "lori": _M, "randy": _H, "manny": _H, "yago": _H, "gary": _H, "andy": _H, "pooch": _H, "poochie": _H,
+    "lori": _M, "randy": _H, "manny": _H, "yago": _H, "gary": _H, "andy": _M, "pooch": _H, "poochie": _H,
     "tommy": _H, "pedro": _H, "lorena": _M, "viper": _M,
     # rótulos genéricos
     "garçom": _H, "garçonete": _M, "motorista": _H, "segurança": _H, "policial": _H, "homem": _H, "mulher": _M,
@@ -705,7 +739,7 @@ def voz_pelo_nome(chave):
             return VOZ_POR_NOME[parte]
     return None
 LETRAS_POR_SEG = 14.0   # ritmo médio de fala, para estimar quanto tempo a legenda dura
-CLONES = {"lucia"}              # personagens com voz clonada. Desde 22/11: Qwen3-TTS 1.7B (servidor_qwen.py, streaming,
+CLONES = set()                  # personagens com voz clonada. Desde 22/11: Qwen3-TTS 1.7B (servidor_qwen.py, streaming,
                          # 1º som ~0,4 s). O Chatterbox (servidor_clone.py) foi aposentado: 2-4,5 s e às vezes robótico.
 FOLGA_CLONE = 0.5        # s de áudio clonado guardado antes de começar a tocar (evita buracos; o Qwen gera ~1,7× mais rápido que fala)
 # Expressão da cena: a própria fala original (inglês) vira a referência do clone — timbre e emoção
@@ -715,7 +749,8 @@ REF_MAX = 2.0            # s da fala original usados como referência (2 s já b
 REF_MIN = 0.7            # abaixo disso (fala curtíssima), usa a referência fixa / voz padrão
 WHISPER_REF = "large-v3-turbo"
 PY_CLONE = r"G:\IA\Qwen3TTS\.venv\Scripts\python.exe"
-SCRIPT_CLONE = "servidor_custom.py"  # CustomVoice (vozes fixas + emoção); clone = "servidor_qwen.py"
+SCRIPT_CLONE = "servidor_qwen.py"  # clone da voz real + emoção por instrução; "servidor_custom.py" = vozes fixas do CustomVoice
+CLONE_LETRAS_SEG = 15.0 if "qwen" in SCRIPT_CLONE else 10.5  # ritmo natural do motor (letras/s): clone Base ~15, CustomVoice ~10,5
 URL_CLONE = "http://127.0.0.1:3912"
 _clone_ok = [False, 0.0]
 
@@ -773,21 +808,18 @@ class FluxoClone:
 
 
 def instrucao_da_fala(t):
-    """Instrução de emoção para o CustomVoice, pela pontuação e pelas palavras da legenda."""
+    """Instrução de emoção pela pontuação e pelas palavras da legenda. Só nos casos fortes:
+    cada instrução é mais uma chance de a voz clonada escapar; o resto vai neutro (sem instrução)."""
     tl = t.lower()
     if re.search(r"\b[A-ZÀ-Ý]{3,}\b", t) or t.count("!") >= 2 or "?!" in t or "!?" in t:
         return "Fale gritando, com muita raiva."
     if "!" in t:
-        return "Fale com raiva, irritado e enérgico."
-    if any(p in tl for p in ("desculpa", "sinto muito", "saudade", "chorar", "morreu", "triste")):
+        return "Fale com raiva, irritado."
+    if any(p in tl for p in ("desculpa", "sinto muito", "saudade", "chorar", "morreu")):
         return "Fale triste, com a voz embargada."
     if any(p in tl for p in ("shh", "quieto", "silêncio", "baixinho", "sussur")):
         return "Fale sussurrando, baixinho."
-    if "..." in t or "…" in t:
-        return "Fale hesitante, pensativo, devagar."
-    if "?" in t:
-        return "Fale curioso, perguntando, natural."
-    return "Fale natural, conversando, com naturalidade."
+    return None
 
 
 def falar_clone(nome, texto, emocao):
@@ -1005,7 +1037,7 @@ def main_legenda(q_audio):
         """Gera a fala (clone se o personagem tiver, senão Kokoro). Roda em paralelo com as outras."""
         chave = canonico(nome)
         expressao = chave in EXPRESSAO and whisper_ref[0] is not None and clone_pronto()
-        clonar = chave in CLONES and clone_pronto()
+        clonar = chave in CLONES and len(fala) >= CLONE_MIN_LETRAS and clone_pronto()  # curtas: voz fixa (clone deriva)
         if clonar or expressao:
             f0, voz = None, VOZ_POR_NOME.get(chave, VOZ_MULHER)
         else:
@@ -1036,7 +1068,7 @@ def main_legenda(q_audio):
                 audio, sr = falar_clone(chave, fala, emocao_da_fala(fala))
                 # a voz com emoção fala ~10,5 letras/s; acelera (sem mudar o tom) para caber no tempo da cena
                 alvo = max(0.8, len(fala) / LETRAS_POR_SEG - falta_tocar)
-                audio.rate = float(min(RATE_MAX_CLONE, max(1.0, (len(fala) / 10.5) / alvo)))
+                audio.rate = float(min(RATE_MAX_CLONE, max(1.0, (len(fala) / CLONE_LETRAS_SEG) / alvo)))
                 motor = "clone"
             except Exception as e:
                 log(f"(aviso) clone falhou ({e}); usando a voz padrão.")

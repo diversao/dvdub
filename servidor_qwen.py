@@ -27,7 +27,8 @@ TMP = tempfile.mkdtemp(prefix="dublagem_ref_")
 AQUI = os.path.dirname(os.path.abspath(__file__))
 PORTA = 3912
 MODELO = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-TEMPERATURA = 0.7   # 0,9 (padrão) às vezes saía robótico
+TEMPERATURA = 0.6   # mais baixo = mais estável (0,7 deu 1 escorregada em 12 no teste; ao vivo ainda variava)
+TOP_K = 20          # amostragem conservadora: menos chance de a voz escapar
 PEDACO = 6          # passos por pedaço (~0,5 s de áudio) — o 1º som sai em ~0,35 s
 SEM_CONTATO = 60
 
@@ -105,6 +106,7 @@ class H(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             texto = req["texto"]
+            instruct = req.get("instruct") or None  # emoção por instrução (funciona no clone com ref_text)
             self.send_response(200)
             self.send_header("X-SR", "24000")
             self.send_header("Connection", "close")
@@ -114,7 +116,7 @@ class H(BaseHTTPRequestHandler):
             with trava:
                 for chunk, sr, _ in modelo.generate_voice_clone_streaming(
                         text=texto, language="Portuguese", ref_audio=wav, ref_text=txt, chunk_size=PEDACO,
-                        temperature=TEMPERATURA, max_new_tokens=maximo):
+                        temperature=TEMPERATURA, top_k=TOP_K, instruct=instruct, max_new_tokens=maximo):
                     a = np.asarray(chunk, dtype=np.float32).reshape(-1)
                     if primeiro is None:
                         primeiro = time.time() - t

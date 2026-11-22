@@ -14,7 +14,7 @@ por isso está aqui: **ajuda é bem-vinda** (veja "Onde ajudar").
 
 ![demo](docs/demo.gif)
 
-Vídeo completo (64 s, com o painel do programa mostrando cada fala e o atraso): [docs/demo.mp4](docs/demo.mp4).
+Vídeo completo (88 s, com o painel do programa mostrando cada fala e o atraso): [docs/demo.mp4](docs/demo.mp4).
 Em cima o jogo; embaixo, o registro do `dublagem.py` com personagem, voz usada e quantos segundos depois
 da legenda a fala saiu.
 

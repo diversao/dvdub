@@ -6,14 +6,14 @@ import time
 
 os.environ.setdefault("HF_HOME", r"G:\IA\Qwen3TTS\hf")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import soundfile as sf
 import torch
 from faster_qwen3_tts import FasterQwen3TTS
 from dublagem import altura_voz
 
-AQUI = os.path.dirname(os.path.abspath(__file__))
+AQUI = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # raiz do projeto
 OUT = os.path.join(AQUI, "teste", "clone_emocao")
 os.makedirs(OUT, exist_ok=True)
 VOZES = {
